@@ -17,21 +17,21 @@ const comparePassword = async (password, hashedPassword) => {
     return await bcrypt.compare(password, hashedPassword);
 };
 
-// Generate JWT token
-const generateToken = (userId, expiresIn = process.env.JWT_EXPIRY) => {
+// Generate JWT token - UPDATED to 15 days default
+const generateToken = (userId, expiresIn = '15d') => {
     return jwt.sign(
         { userId },
         process.env.JWT_SECRET,
-        { expiresIn }
+        { expiresIn: expiresIn || '15d' }
     );
 };
 
-// Generate refresh token
+// Generate refresh token - UPDATED to 30 days
 const generateRefreshToken = (userId) => {
     return jwt.sign(
         { userId },
         process.env.JWT_REFRESH_SECRET,
-        { expiresIn: process.env.JWT_REFRESH_EXPIRY }
+        { expiresIn: '30d' }
     );
 };
 

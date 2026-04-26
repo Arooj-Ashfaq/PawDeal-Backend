@@ -42,7 +42,7 @@ const io = new Server(httpServer, {
 app.set('io', io);
 
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
+    windowMs: 60 * 60 * 1000,
     max: 100,
     message: 'Too many requests from this IP, please try again later.'
 });
@@ -70,10 +70,22 @@ app.use('/uploads', (req, res, next) => {
     next();
 }, express.static(path.join(__dirname, 'uploads')));
 
-// FIX: Redirect frontend image requests to backend
-app.use('/uploads', (req, res, next) => {
-    const backendUrl = `http://localhost:5000${req.url}`;
-    res.redirect(backendUrl);
+// Image proxy endpoint for pets
+app.get('/api/images/pets/:filename', (req, res) => {
+    const { filename } = req.params;
+    const imagePath = path.join(__dirname, 'uploads', 'pets', filename);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.sendFile(imagePath);
+});
+
+// Image proxy endpoint for products
+app.get('/api/images/products/:filename', (req, res) => {
+    const { filename } = req.params;
+    const imagePath = path.join(__dirname, 'uploads', 'products', filename);
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.sendFile(imagePath);
 });
 
 app.use('/api/auth', limiter);

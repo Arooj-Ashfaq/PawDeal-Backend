@@ -2,8 +2,9 @@
 const FavoriteModel = require('../models/favoriteModel');
 const PetModel = require('../models/petModel');
 const ProductModel = require('../models/productModel');
+const DB = require('../models/db');
 
-// Get user's favorites
+// Get user's favorites - MODIFIED to return full pet data
 const getFavorites = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -12,11 +13,41 @@ const getFavorites = async (req, res) => {
         let result;
 
         if (type === 'pets') {
-            result = await FavoriteModel.getUserPets(userId, page, limit);
+            // Get favorites with full pet details using JOIN
+            const query = `
+                SELECT 
+                    p.*,
+                    f.created_at as favorited_at
+                FROM favorites f
+                JOIN pets p ON f.pet_id = p.id
+                WHERE f.user_id = ? AND f.item_type = 'pet'
+                ORDER BY f.created_at DESC
+            `;
+            const favorites = await DB.query(query, [userId]);
+            
+            result = {
+                data: favorites,
+                pagination: { page: 1, limit: favorites.length, total: favorites.length, pages: 1 }
+            };
         } else if (type === 'products') {
             result = await FavoriteModel.getUserProducts(userId, page, limit);
         } else {
-            result = await FavoriteModel.getAllUserFavorites(userId, page, limit);
+            // Get all favorites with pet details
+            const query = `
+                SELECT 
+                    p.*,
+                    f.created_at as favorited_at
+                FROM favorites f
+                JOIN pets p ON f.pet_id = p.id
+                WHERE f.user_id = ?
+                ORDER BY f.created_at DESC
+            `;
+            const favorites = await DB.query(query, [userId]);
+            
+            result = {
+                data: favorites,
+                pagination: { page: 1, limit: favorites.length, total: favorites.length, pages: 1 }
+            };
         }
 
         // Get counts
@@ -37,11 +68,13 @@ const getFavorites = async (req, res) => {
     }
 };
 
-// Add item to favorites
+// Add item to favorites - MODIFIED to use correct ID format
 const addFavorite = async (req, res) => {
     try {
         const userId = req.user.id;
         const { type, id } = req.params;
+
+        console.log('Add favorite - User:', userId, 'Type:', type, 'ID:', id);
 
         if (!['pet', 'product'].includes(type)) {
             return res.status(400).json({
@@ -50,13 +83,13 @@ const addFavorite = async (req, res) => {
             });
         }
 
-        // Verify item exists
+        // Verify item exists using UUID
         if (type === 'pet') {
             const pet = await PetModel.findById(id);
             if (!pet) {
                 return res.status(404).json({
                     success: false,
-                    error: 'Pet not found'
+                    error: 'Pet not found with ID: ' + id
                 });
             }
         } else {
@@ -72,9 +105,7 @@ const addFavorite = async (req, res) => {
         const added = await FavoriteModel.add(userId, type, id);
 
         if (added) {
-            // Get updated counts
             const counts = await FavoriteModel.getCounts(userId);
-
             res.json({
                 success: true,
                 message: 'Added to favorites',
@@ -109,8 +140,6 @@ const removeFavorite = async (req, res) => {
         }
 
         await FavoriteModel.remove(userId, type, id);
-
-        // Get updated counts
         const counts = await FavoriteModel.getCounts(userId);
 
         res.json({
@@ -159,9 +188,7 @@ const checkFavorite = async (req, res) => {
 const getFavoriteCounts = async (req, res) => {
     try {
         const userId = req.user.id;
-
         const counts = await FavoriteModel.getCounts(userId);
-
         res.json({
             success: true,
             counts
@@ -179,9 +206,7 @@ const getFavoriteCounts = async (req, res) => {
 const clearFavorites = async (req, res) => {
     try {
         const userId = req.user.id;
-
         const count = await FavoriteModel.clearAll(userId);
-
         res.json({
             success: true,
             message: `All favorites cleared (${count} items removed)`
@@ -200,9 +225,7 @@ const getFavoriteSuggestions = async (req, res) => {
     try {
         const userId = req.user.id;
         const { limit = 10 } = req.query;
-
         const suggestions = await FavoriteModel.getSuggestions(userId, limit);
-
         res.json({
             success: true,
             data: suggestions
@@ -220,15 +243,12 @@ const getFavoriteSuggestions = async (req, res) => {
 const getMostFavorited = async (req, res) => {
     try {
         const { type = 'pets', limit = 10 } = req.query;
-
         let items;
         if (type === 'pets') {
             items = await FavoriteModel.getMostFavoritedPets(limit);
         } else {
-            // You could add most favorited products here
             items = [];
         }
-
         res.json({
             success: true,
             type,
@@ -248,19 +268,14 @@ const bulkAddFavorites = async (req, res) => {
     try {
         const userId = req.user.id;
         const { items } = req.body;
-
         if (!Array.isArray(items) || items.length === 0) {
             return res.status(400).json({
                 success: false,
                 error: 'Items array required'
             });
         }
-
         const results = await FavoriteModel.bulkAdd(userId, items);
-
-        // Get updated counts
         const counts = await FavoriteModel.getCounts(userId);
-
         res.json({
             success: true,
             message: `Added ${results.added} items, ${results.skipped} already existed`,
@@ -280,9 +295,7 @@ const bulkAddFavorites = async (req, res) => {
 const exportFavorites = async (req, res) => {
     try {
         const userId = req.user.id;
-
         const data = await FavoriteModel.exportUserData(userId);
-
         res.json({
             success: true,
             data
