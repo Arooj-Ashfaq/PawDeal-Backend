@@ -3,60 +3,56 @@ const FavoriteModel = require('../models/favoriteModel');
 const PetModel = require('../models/petModel');
 const ProductModel = require('../models/productModel');
 const DB = require('../models/db');
+const { v4: uuidv4 } = require('uuid');
 
-// Get user's favorites - MODIFIED to return full pet data
+// Get user's favorites - SIMPLIFIED VERSION
 const getFavorites = async (req, res) => {
     try {
         const userId = req.user.id;
-        const { page = 1, limit = 20, type = 'all' } = req.query;
+        const { type = 'all' } = req.query;
 
-        let result;
+        let favorites = [];
 
-        if (type === 'pets') {
-            // Get favorites with full pet details using JOIN
-            const query = `
-                SELECT 
+        if (type === 'pets' || type === 'all') {
+            const petFavorites = await DB.query(
+                `SELECT 
                     p.*,
+                    'pet' as item_type,
                     f.created_at as favorited_at
                 FROM favorites f
-                JOIN pets p ON f.pet_id = p.id
-                WHERE f.user_id = ? AND f.item_type = 'pet'
-                ORDER BY f.created_at DESC
-            `;
-            const favorites = await DB.query(query, [userId]);
-            
-            result = {
-                data: favorites,
-                pagination: { page: 1, limit: favorites.length, total: favorites.length, pages: 1 }
-            };
-        } else if (type === 'products') {
-            result = await FavoriteModel.getUserProducts(userId, page, limit);
-        } else {
-            // Get all favorites with pet details
-            const query = `
-                SELECT 
-                    p.*,
-                    f.created_at as favorited_at
-                FROM favorites f
-                JOIN pets p ON f.pet_id = p.id
-                WHERE f.user_id = ?
-                ORDER BY f.created_at DESC
-            `;
-            const favorites = await DB.query(query, [userId]);
-            
-            result = {
-                data: favorites,
-                pagination: { page: 1, limit: favorites.length, total: favorites.length, pages: 1 }
-            };
+                JOIN pets p ON f.item_id = p.id
+                WHERE f.user_id = ? AND f.item_type = 'pet'`,
+                [userId]
+            );
+            favorites = [...favorites, ...petFavorites];
         }
 
-        // Get counts
-        const counts = await FavoriteModel.getCounts(userId);
+        if (type === 'products' || type === 'all') {
+            const productFavorites = await DB.query(
+                `SELECT 
+                    pr.*,
+                    'product' as item_type,
+                    f.created_at as favorited_at
+                FROM favorites f
+                JOIN products pr ON f.item_id = pr.id
+                WHERE f.user_id = ? AND f.item_type = 'product'`,
+                [userId]
+            );
+            favorites = [...favorites, ...productFavorites];
+        }
+
+        // Sort by favorited date
+        favorites.sort((a, b) => new Date(b.favorited_at) - new Date(a.favorited_at));
+
+        const counts = {
+            pets: favorites.filter(f => f.item_type === 'pet').length,
+            products: favorites.filter(f => f.item_type === 'product').length,
+            total: favorites.length
+        };
 
         res.json({
             success: true,
-            data: result.data,
-            pagination: result.pagination,
+            data: favorites,
             counts
         });
     } catch (error) {
@@ -68,7 +64,7 @@ const getFavorites = async (req, res) => {
     }
 };
 
-// Add item to favorites - MODIFIED to use correct ID format
+// Add item to favorites
 const addFavorite = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -83,13 +79,13 @@ const addFavorite = async (req, res) => {
             });
         }
 
-        // Verify item exists using UUID
+        // Verify item exists
         if (type === 'pet') {
             const pet = await PetModel.findById(id);
             if (!pet) {
                 return res.status(404).json({
                     success: false,
-                    error: 'Pet not found with ID: ' + id
+                    error: 'Pet not found'
                 });
             }
         } else {
@@ -102,21 +98,30 @@ const addFavorite = async (req, res) => {
             }
         }
 
-        const added = await FavoriteModel.add(userId, type, id);
+        // Check if already favorited
+        const existing = await DB.query(
+            'SELECT id FROM favorites WHERE user_id = ? AND item_id = ? AND item_type = ?',
+            [userId, id, type]
+        );
 
-        if (added) {
-            const counts = await FavoriteModel.getCounts(userId);
-            res.json({
-                success: true,
-                message: 'Added to favorites',
-                counts
-            });
-        } else {
-            res.status(400).json({
+        if (existing.length > 0) {
+            return res.status(400).json({
                 success: false,
                 error: 'Item already in favorites'
             });
         }
+
+        // Add to favorites
+        const favoriteId = uuidv4();
+        await DB.query(
+            'INSERT INTO favorites (id, user_id, item_id, item_type, created_at) VALUES (?, ?, ?, ?, NOW())',
+            [favoriteId, userId, id, type]
+        );
+
+        res.json({
+            success: true,
+            message: 'Added to favorites'
+        });
     } catch (error) {
         console.error('Add favorite error:', error);
         res.status(500).json({
@@ -139,13 +144,14 @@ const removeFavorite = async (req, res) => {
             });
         }
 
-        await FavoriteModel.remove(userId, type, id);
-        const counts = await FavoriteModel.getCounts(userId);
+        await DB.query(
+            'DELETE FROM favorites WHERE user_id = ? AND item_id = ? AND item_type = ?',
+            [userId, id, type]
+        );
 
         res.json({
             success: true,
-            message: 'Removed from favorites',
-            counts
+            message: 'Removed from favorites'
         });
     } catch (error) {
         console.error('Remove favorite error:', error);
@@ -169,11 +175,14 @@ const checkFavorite = async (req, res) => {
             });
         }
 
-        const isFavorited = await FavoriteModel.isFavorited(userId, type, id);
+        const result = await DB.query(
+            'SELECT id FROM favorites WHERE user_id = ? AND item_id = ? AND item_type = ?',
+            [userId, id, type]
+        );
 
         res.json({
             success: true,
-            is_favorited: isFavorited
+            is_favorited: result.length > 0
         });
     } catch (error) {
         console.error('Check favorite error:', error);
@@ -188,10 +197,24 @@ const checkFavorite = async (req, res) => {
 const getFavoriteCounts = async (req, res) => {
     try {
         const userId = req.user.id;
-        const counts = await FavoriteModel.getCounts(userId);
+        
+        const petCount = await DB.query(
+            'SELECT COUNT(*) as count FROM favorites WHERE user_id = ? AND item_type = "pet"',
+            [userId]
+        );
+        
+        const productCount = await DB.query(
+            'SELECT COUNT(*) as count FROM favorites WHERE user_id = ? AND item_type = "product"',
+            [userId]
+        );
+
         res.json({
             success: true,
-            counts
+            counts: {
+                pets: petCount[0]?.count || 0,
+                products: productCount[0]?.count || 0,
+                total: (petCount[0]?.count || 0) + (productCount[0]?.count || 0)
+            }
         });
     } catch (error) {
         console.error('Get favorite counts error:', error);
@@ -206,10 +229,10 @@ const getFavoriteCounts = async (req, res) => {
 const clearFavorites = async (req, res) => {
     try {
         const userId = req.user.id;
-        const count = await FavoriteModel.clearAll(userId);
+        await DB.query('DELETE FROM favorites WHERE user_id = ?', [userId]);
         res.json({
             success: true,
-            message: `All favorites cleared (${count} items removed)`
+            message: 'All favorites cleared'
         });
     } catch (error) {
         console.error('Clear favorites error:', error);
@@ -220,104 +243,11 @@ const clearFavorites = async (req, res) => {
     }
 };
 
-// Get favorite suggestions
-const getFavoriteSuggestions = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { limit = 10 } = req.query;
-        const suggestions = await FavoriteModel.getSuggestions(userId, limit);
-        res.json({
-            success: true,
-            data: suggestions
-        });
-    } catch (error) {
-        console.error('Get favorite suggestions error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to get suggestions'
-        });
-    }
-};
-
-// Get most favorited items (public)
-const getMostFavorited = async (req, res) => {
-    try {
-        const { type = 'pets', limit = 10 } = req.query;
-        let items;
-        if (type === 'pets') {
-            items = await FavoriteModel.getMostFavoritedPets(limit);
-        } else {
-            items = [];
-        }
-        res.json({
-            success: true,
-            type,
-            data: items
-        });
-    } catch (error) {
-        console.error('Get most favorited error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to get most favorited items'
-        });
-    }
-};
-
-// Bulk add favorites
-const bulkAddFavorites = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { items } = req.body;
-        if (!Array.isArray(items) || items.length === 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'Items array required'
-            });
-        }
-        const results = await FavoriteModel.bulkAdd(userId, items);
-        const counts = await FavoriteModel.getCounts(userId);
-        res.json({
-            success: true,
-            message: `Added ${results.added} items, ${results.skipped} already existed`,
-            results,
-            counts
-        });
-    } catch (error) {
-        console.error('Bulk add favorites error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to bulk add favorites'
-        });
-    }
-};
-
-// Export favorites (for GDPR)
-const exportFavorites = async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const data = await FavoriteModel.exportUserData(userId);
-        res.json({
-            success: true,
-            data
-        });
-    } catch (error) {
-        console.error('Export favorites error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to export favorites'
-        });
-    }
-};
-
 module.exports = {
     getFavorites,
     addFavorite,
     removeFavorite,
     checkFavorite,
     getFavoriteCounts,
-    clearFavorites,
-    getFavoriteSuggestions,
-    getMostFavorited,
-    bulkAddFavorites,
-    exportFavorites
+    clearFavorites
 };
