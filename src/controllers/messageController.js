@@ -148,14 +148,17 @@ const createConversation = async (req, res) => {
     }
 };
 
-// Send message
+// Send message - FIXED VERSION
 const sendMessage = async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.user.id;
-        const { content } = req.body;
+        const { content, message_content } = req.body;
+        
+        // Accept both 'content' and 'message_content' field names
+        const messageText = content || message_content;
 
-        if (!content || content.trim() === '') {
+        if (!messageText || messageText.trim() === '') {
             return res.status(400).json({
                 success: false,
                 error: 'Message content is required'
@@ -179,7 +182,7 @@ const sendMessage = async (req, res) => {
             id,
             userId,
             receiver.id,
-            content
+            messageText
         );
 
         // Get the created message
@@ -195,7 +198,7 @@ const sendMessage = async (req, res) => {
         const receiverPrefs = receiver.notification_preferences || {};
         if (receiverPrefs.email !== false) {
             const sender = await UserModel.findById(userId);
-            await sendNewMessageEmail(receiver, sender, content.substring(0, 100));
+            await sendNewMessageEmail(receiver, sender, messageText.substring(0, 100));
         }
 
         // Emit socket event (handled by socket handler)
